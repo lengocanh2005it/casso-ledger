@@ -93,6 +93,20 @@ describe('MarkPrepaidBankTransactionUseCase', () => {
     ).rejects.toMatchObject({ errorCode: ErrorCode.CONFLICT });
   });
 
+  it('marks an UNMATCHED transaction prepaid', async () => {
+    const { useCase, paymentRepo } = buildUseCase(
+      buildTransaction('UNMATCHED'),
+    );
+
+    const result = await useCase.execute({
+      bankTransactionId: 'bt-1',
+      customerId: 'cust-1',
+    });
+
+    expect(paymentRepo.save).toHaveBeenCalled();
+    expect(result.transaction.status).toBe('PREPAID');
+  });
+
   it('rejects a customer outside the current tenant', async () => {
     const { useCase, customerRepo } = buildUseCase();
     customerRepo.findById.mockResolvedValue(null);

@@ -7,6 +7,22 @@ export type BankTransactionStatus =
   | 'IGNORED'
   | 'PREPAID';
 
+/**
+ * Statuses a reviewer may still act on in the Exception Queue. `UNMATCHED`
+ * (auto-matching found nothing) sits here alongside `PENDING_REVIEW` (found
+ * candidates but could not decide); the rest are terminal.
+ */
+export const ACTIONABLE_BANK_TRANSACTION_STATUSES = [
+  'PENDING_REVIEW',
+  'UNMATCHED',
+] as const satisfies readonly BankTransactionStatus[];
+
+export function isActionableStatus(status: BankTransactionStatus): boolean {
+  return ACTIONABLE_BANK_TRANSACTION_STATUSES.includes(
+    status as (typeof ACTIONABLE_BANK_TRANSACTION_STATUSES)[number],
+  );
+}
+
 export interface BankTransactionProps {
   id: string;
   organizationId: string;

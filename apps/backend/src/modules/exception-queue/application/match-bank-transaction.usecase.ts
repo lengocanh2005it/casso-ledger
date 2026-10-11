@@ -25,7 +25,10 @@ import {
   BANK_TRANSACTION_REPOSITORY,
   type IBankTransactionRepository,
 } from '../../webhooks/application/bank-transaction-repository.port';
-import { BankTransaction } from '../../webhooks/domain/bank-transaction';
+import {
+  BankTransaction,
+  isActionableStatus,
+} from '../../webhooks/domain/bank-transaction';
 
 export interface MatchAllocationItem {
   receivableId: string;
@@ -87,7 +90,7 @@ export class MatchBankTransactionUseCase {
         this.auditContext.setBefore(transaction);
         if (
           transaction.version !== input.version ||
-          transaction.status !== 'PENDING_REVIEW'
+          !isActionableStatus(transaction.status)
         ) {
           throw new AppError(
             ErrorCode.OPTIMISTIC_LOCK_CONFLICT,

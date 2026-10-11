@@ -5,6 +5,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 import { toast } from 'sonner';
+import type { QueueStatus } from '../types';
 import {
   batchApproveMatch,
   batchMarkPrepaid,
@@ -16,10 +17,14 @@ import {
   splitMatch,
 } from './exceptions-api';
 
-export function usePendingReview(page = 1, search?: string) {
+export function usePendingReview(
+  page = 1,
+  search?: string,
+  status?: QueueStatus,
+) {
   return useQuery({
-    queryKey: ['bank-transactions', page, search],
-    queryFn: () => fetchPendingReview(page, search),
+    queryKey: ['bank-transactions', page, search, status ?? null],
+    queryFn: () => fetchPendingReview(page, search, status),
     placeholderData: keepPreviousData,
   });
 }

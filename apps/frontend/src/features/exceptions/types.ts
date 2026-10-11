@@ -5,6 +5,9 @@ export type BankTransactionStatus =
   | 'IGNORED'
   | 'PREPAID';
 
+/** Statuses a reviewer can still act on: the Exception Queue shows both. */
+export type QueueStatus = 'PENDING_REVIEW' | 'UNMATCHED';
+
 export interface BankTransaction {
   id: string;
   bankConnectionId?: string;

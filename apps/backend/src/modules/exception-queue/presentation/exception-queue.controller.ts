@@ -76,14 +76,22 @@ export class ExceptionQueueController {
   @RequirePermission(Permission.PAYMENT_ALLOCATE)
   async unmatched(@Query() query: ExceptionQueuePaginationDto) {
     return toUnmatchedResponse(
-      await this.unmatchedQuery.execute(query.page, query.limit, query.search),
+      await this.unmatchedQuery.execute(
+        query.page,
+        query.limit,
+        query.search,
+        query.status,
+      ),
     );
   }
 
   @Get('pending-review-count')
-  @ApiOperation({ summary: 'Count bank transactions pending review' })
+  @ApiOperation({
+    summary: 'Count bank transactions still awaiting a reviewer decision',
+  })
   @ApiOkResponse({
-    description: 'Number of pending-review transactions',
+    description:
+      'Number of transactions awaiting review (pending review + unmatched)',
     schema: {
       type: 'object',
       required: ['count'],
@@ -92,7 +100,7 @@ export class ExceptionQueueController {
   })
   @RequirePermission(Permission.PAYMENT_ALLOCATE)
   async pendingReviewCount() {
-    return { count: await this.unmatchedQuery.countPendingReview() };
+    return { count: await this.unmatchedQuery.countQueue() };
   }
 
   @Get(':id/candidates')

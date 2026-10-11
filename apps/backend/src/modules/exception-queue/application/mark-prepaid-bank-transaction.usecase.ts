@@ -22,7 +22,10 @@ import {
   BANK_TRANSACTION_REPOSITORY,
   type IBankTransactionRepository,
 } from '../../webhooks/application/bank-transaction-repository.port';
-import { BankTransaction } from '../../webhooks/domain/bank-transaction';
+import {
+  BankTransaction,
+  isActionableStatus,
+} from '../../webhooks/domain/bank-transaction';
 
 export interface MarkPrepaidBankTransactionInput {
   bankTransactionId: string;
@@ -63,11 +66,7 @@ export class MarkPrepaidBankTransactionUseCase {
           'Không tìm thấy giao dịch ngân hàng.',
         );
       }
-      if (
-        transaction.status === 'MATCHED' ||
-        transaction.status === 'IGNORED' ||
-        transaction.status === 'PREPAID'
-      ) {
+      if (!isActionableStatus(transaction.status)) {
         throw new AppError(ErrorCode.CONFLICT, 'Giao dịch đã được xử lý.');
       }
 

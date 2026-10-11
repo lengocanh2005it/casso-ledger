@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import type { EntityManager, FindOptionsWhere, Repository } from 'typeorm';
-import { ILike } from 'typeorm';
+import { ILike, In } from 'typeorm';
 import { toLikePattern } from '../../../common/database/like-pattern';
 import { BaseRepository } from '../../../common/tenancy/base.repository';
 import { TenantContextService } from '../../../common/tenancy/tenant-context';
@@ -88,7 +88,7 @@ export class TypeOrmBankTransactionRepository
   }
 
   async findManyByStatus(
-    status: BankTransactionStatus,
+    status: BankTransactionStatus[],
     options?: { skip?: number; take?: number; search?: string },
   ): Promise<BankTransaction[]> {
     const organizationId = this.tenantContext.getOrganizationId();
@@ -102,7 +102,7 @@ export class TypeOrmBankTransactionRepository
   }
 
   async countByStatus(
-    status: BankTransactionStatus,
+    status: BankTransactionStatus[],
     search?: string,
   ): Promise<number> {
     const organizationId = this.tenantContext.getOrganizationId();
@@ -117,14 +117,14 @@ export class TypeOrmBankTransactionRepository
 // organizationId + status.
 function searchWhere(
   organizationId: string,
-  status: BankTransactionStatus,
+  status: BankTransactionStatus[],
   search: string | undefined,
 ):
   | FindOptionsWhere<BankTransactionOrmEntity>
   | FindOptionsWhere<BankTransactionOrmEntity>[] {
   const base: FindOptionsWhere<BankTransactionOrmEntity> = {
     organizationId,
-    status,
+    status: In(status),
   };
   if (!search) return base;
   const term = ILike(toLikePattern(search));

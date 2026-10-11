@@ -163,7 +163,7 @@ describe('UnmatchedBankTransactionsQueryService', () => {
     const result = await service.execute(3, 10);
 
     expect(bankTransactionRepo.findManyByStatus).toHaveBeenCalledWith(
-      'PENDING_REVIEW',
+      ['PENDING_REVIEW', 'UNMATCHED'],
       { skip: 20, take: 10 },
     );
     expect(result.total).toBe(45);
@@ -199,11 +199,11 @@ describe('UnmatchedBankTransactionsQueryService', () => {
     await service.execute(1, 20, 'nguyen van a');
 
     expect(bankTransactionRepo.findManyByStatus).toHaveBeenCalledWith(
-      'PENDING_REVIEW',
+      ['PENDING_REVIEW', 'UNMATCHED'],
       { skip: 0, take: 20, search: 'nguyen van a' },
     );
     expect(bankTransactionRepo.countByStatus).toHaveBeenCalledWith(
-      'PENDING_REVIEW',
+      ['PENDING_REVIEW', 'UNMATCHED'],
       'nguyen van a',
     );
   });
@@ -606,5 +606,75 @@ describe('UnmatchedBankTransactionsQueryService', () => {
       { customerId: 'cust-1', customerName: 'Cong ty A' },
     ]);
     expect(page.items[1].payer.linkedCustomers).toEqual([]);
+  });
+
+  it('queues UNMATCHED transactions next to PENDING_REVIEW ones and counts both', async () => {
+    const bankTransactionRepo = {
+      findManyByStatus: jest.fn().mockResolvedValue([]),
+      countByStatus: jest.fn().mockResolvedValue(7),
+    };
+    const service = new UnmatchedBankTransactionsQueryService(
+      bankTransactionRepo as never,
+      {
+        findRunnerUpScoresByBankTransactionIds: jest
+          .fn()
+          .mockResolvedValue(new Map()),
+        findTopByBankTransactionIds: jest.fn().mockResolvedValue(new Map()),
+      } as never,
+      {
+        findByIds: jest.fn().mockResolvedValue(new Map()),
+        findOpenByIds: jest.fn().mockResolvedValue([]),
+      } as never,
+      { findByIds: jest.fn().mockResolvedValue(new Map()) } as never,
+      { findByIds: jest.fn().mockResolvedValue(new Map()) } as never,
+      { findActiveByAccountNumbers: jest.fn().mockResolvedValue([]) } as never,
+    );
+
+    const page = await service.execute(1, 20);
+
+    expect(bankTransactionRepo.findManyByStatus).toHaveBeenCalledWith(
+      ['PENDING_REVIEW', 'UNMATCHED'],
+      { skip: 0, take: 20 },
+    );
+    expect(bankTransactionRepo.countByStatus).toHaveBeenCalledWith(
+      ['PENDING_REVIEW', 'UNMATCHED'],
+      undefined,
+    );
+    expect(page.total).toBe(7);
+    await expect(service.countQueue()).resolves.toBe(7);
+    expect(bankTransactionRepo.countByStatus).toHaveBeenLastCalledWith([
+      'PENDING_REVIEW',
+      'UNMATCHED',
+    ]);
+  });
+
+  it('narrows the queue to a single status when the reviewer filters by one', async () => {
+    const bankTransactionRepo = {
+      findManyByStatus: jest.fn().mockResolvedValue([]),
+      countByStatus: jest.fn().mockResolvedValue(2),
+    };
+    const service = new UnmatchedBankTransactionsQueryService(
+      bankTransactionRepo as never,
+      {
+        findRunnerUpScoresByBankTransactionIds: jest
+          .fn()
+          .mockResolvedValue(new Map()),
+        findTopByBankTransactionIds: jest.fn().mockResolvedValue(new Map()),
+      } as never,
+      {
+        findByIds: jest.fn().mockResolvedValue(new Map()),
+        findOpenByIds: jest.fn().mockResolvedValue([]),
+      } as never,
+      { findByIds: jest.fn().mockResolvedValue(new Map()) } as never,
+      { findByIds: jest.fn().mockResolvedValue(new Map()) } as never,
+      { findActiveByAccountNumbers: jest.fn().mockResolvedValue([]) } as never,
+    );
+
+    await service.execute(1, 20, undefined, 'UNMATCHED');
+
+    expect(bankTransactionRepo.findManyByStatus).toHaveBeenCalledWith(
+      ['UNMATCHED'],
+      { skip: 0, take: 20 },
+    );
   });
 });

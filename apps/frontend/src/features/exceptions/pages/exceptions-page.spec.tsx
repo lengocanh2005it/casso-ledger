@@ -45,6 +45,92 @@ describe('ExceptionsPage', () => {
     );
   });
 
+  it('sends the chosen status as a queue filter', async () => {
+    apiRequest.mockResolvedValue({ items: [], total: 0, page: 1, limit: 20 });
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/?status=UNMATCHED']}>
+          <ExceptionsPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() =>
+      expect(apiRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: '/api/v1/bank-transactions/unmatched',
+          params: expect.objectContaining({ status: 'UNMATCHED' }),
+        }),
+      ),
+    );
+  });
+
+  it('labels UNMATCHED rows so a reviewer can tell them from pending-review ones', async () => {
+    apiRequest.mockResolvedValue({
+      items: [
+        {
+          transaction: {
+            id: 'tx-unmatched',
+            providerTransactionId: 'TX-U',
+            amount: 10_000,
+            transactionDateTime: '2026-08-01',
+            counterpartyAccountNumber: '001',
+            counterpartyName: 'A',
+            transferContent: 'chuyen tien',
+            status: 'UNMATCHED',
+            version: 1,
+          },
+          topCandidate: null,
+        },
+        {
+          transaction: {
+            id: 'tx-pending',
+            providerTransactionId: 'TX-P',
+            amount: 20_000,
+            transactionDateTime: '2026-08-02',
+            counterpartyAccountNumber: '002',
+            counterpartyName: 'B',
+            transferContent: 'thanh toan',
+            status: 'PENDING_REVIEW',
+            version: 1,
+          },
+          topCandidate: null,
+        },
+      ],
+      total: 2,
+      page: 1,
+      limit: 20,
+    });
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <ExceptionsPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    const badge = await screen.findByText('Chưa khớp');
+    expect(badge.closest('tr')).toHaveTextContent('chuyen tien');
+    expect(
+      screen
+        .getAllByText('chuyen tien')
+        .every((cell) =>
+          cell.closest('tr')?.textContent?.includes('Chưa khớp'),
+        ),
+    ).toBe(true);
+    expect(
+      screen.getByText('thanh toan').closest('tr')?.textContent,
+    ).not.toContain('Chưa khớp');
+  });
+
   it('renders a checkbox per row and shows the bulk action bar once a row is selected', async () => {
     apiRequest.mockResolvedValue({
       items: [

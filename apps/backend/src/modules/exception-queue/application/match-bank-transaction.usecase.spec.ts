@@ -137,6 +137,43 @@ describe('MatchBankTransactionUseCase', () => {
     await expect(useCase.execute(input)).rejects.toBeInstanceOf(AppError);
   });
 
+  it('matches an UNMATCHED transaction the same way as a pending-review one', async () => {
+    const {
+      useCase,
+      bankTransactionRepo,
+      paymentRepo,
+      allocatePaymentUseCase,
+    } = buildUseCase({
+      transaction: buildTransaction({ status: 'UNMATCHED' }),
+      receivables: { 'rec-1': buildReceivable('rec-1') },
+    });
+
+    const result = await useCase.execute(input);
+
+    expect(paymentRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ totalAmount: 30_000_000 }),
+      expect.anything(),
+    );
+    expect(
+      allocatePaymentUseCase.allocateWithinTransaction,
+    ).toHaveBeenCalledTimes(1);
+    expect(bankTransactionRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'MATCHED' }),
+      expect.anything(),
+    );
+    expect(result.status).toBe('MATCHED');
+  });
+
+  it('rejects an UNMATCHED transaction whose version no longer matches', async () => {
+    const { useCase } = buildUseCase({
+      transaction: buildTransaction({ status: 'UNMATCHED', version: 2 }),
+    });
+
+    await expect(useCase.execute(input)).rejects.toMatchObject({
+      errorCode: ErrorCode.OPTIMISTIC_LOCK_CONFLICT,
+    });
+  });
+
   it('rejects allocations whose sum exceeds the transaction amount', async () => {
     const { useCase } = buildUseCase({
       transaction: buildTransaction({ amount: 20_000_000 }),

@@ -120,20 +120,23 @@ const candidates = [
   },
 ];
 
-function renderDialog(aiRecommendation?: {
-  status: 'SUCCEEDED' | 'ABSTAINED' | 'FAILED';
-  recommendedReceivableId: string | null;
-  confidence: number | null;
-  reason: string | null;
-  isCurrent: boolean;
-}) {
+function renderDialog(
+  aiRecommendation?: {
+    status: 'SUCCEEDED' | 'ABSTAINED' | 'FAILED';
+    recommendedReceivableId: string | null;
+    confidence: number | null;
+    reason: string | null;
+    isCurrent: boolean;
+  },
+  transaction: BankTransaction = tx,
+) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
       <SplitMatchDialog
-        tx={tx}
+        tx={transaction}
         aiRecommendation={aiRecommendation}
         open
         onOpenChange={vi.fn()}
@@ -144,6 +147,9 @@ function renderDialog(aiRecommendation?: {
 
 describe('SplitMatchDialog', () => {
   beforeEach(() => {
+    // jsdom does not implement scrollIntoView; radix Select calls it when the
+    // customer picker opens.
+    Element.prototype.scrollIntoView = vi.fn();
     apiRequest.mockClear();
     toastSuccess.mockClear();
     toastWarning.mockClear();
@@ -432,6 +438,262 @@ describe('SplitMatchDialog', () => {
         '[data-slot="dialog-header"] [data-slot="dialog-description"]',
       ),
     ).not.toBeNull();
+  });
+
+  const openReceivable = {
+    id: 'r9',
+    customerId: 'c9',
+    customerName: 'Công ty Mới',
+    invoiceId: 'inv-9',
+    invoiceNumber: 'INV-2026-009',
+    originalAmount: 50_000_000,
+    paidAmount: 0,
+    remainingAmount: 50_000_000,
+    dueDate: '2026-09-15T00:00:00Z',
+    status: 'OPEN',
+    isDisputed: false,
+    disputeId: null,
+    isOverdue: false,
+    salesRepresentativeId: null,
+    createdAt: '2026-08-01T00:00:00Z',
+    closedAt: null,
+  };
+  const closedReceivable = {
+    ...openReceivable,
+    id: 'r-closed',
+    invoiceId: 'inv-8',
+    invoiceNumber: 'INV-2026-008',
+    originalAmount: 10_000_000,
+    paidAmount: 10_000_000,
+    remainingAmount: 0,
+    status: 'PAID',
+    closedAt: '2026-08-10T00:00:00Z',
+  };
+
+  // An UNMATCHED transaction stores no candidates, so there is nothing to
+  // rank: the reviewer picks the customer, then the receivables to allocate to.
+  it('lets a reviewer pick receivables by customer when there are no candidates', async () => {
+    apiRequest.mockImplementation(
+      (cfg: { url: string; params?: Record<string, unknown> }) => {
+        if (cfg.url.includes('/candidates')) return Promise.resolve([]);
+        if (cfg.url === '/api/v1/customers') {
+          return Promise.resolve({
+            items: [{ id: 'c9', name: 'Công ty Mới' }],
+          });
+        }
+        if (cfg.url === '/api/v1/receivables') {
+          // A closed receivable for the same customer, which the server
+          // filters out once the dialog asks for open statuses.
+          return Promise.resolve({
+            items:
+              cfg.params?.status === 'PARTIALLY_PAID'
+                ? []
+                : [openReceivable, closedReceivable],
+            total: 1,
+            page: 1,
+            limit: 100,
+          });
+        }
+        return Promise.resolve({ id: 'bt9' });
+      },
+    );
+    renderDialog(undefined, { ...tx, status: 'UNMATCHED' });
+
+    expect(await screen.findByText(/chưa có gợi ý khớp/i)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/tìm khách hàng/i), {
+      target: { value: 'cong ty moi' },
+    });
+    fireEvent.click(await screen.findByRole('combobox'));
+    fireEvent.click(await screen.findByRole('option', { name: 'Công ty Mới' }));
+
+    expect(
+      await screen.findByText('INV-2026-009 — Công ty Mới'),
+    ).toBeInTheDocument();
+    // Only the receivable that can still take money is offered.
+    expect(screen.queryByText(/INV-2026-008/)).not.toBeInTheDocument();
+
+    fireEvent.change(
+      screen.getByLabelText('Số tiền phân bổ cho INV-2026-009'),
+      { target: { value: '50000000' } },
+    );
+    fireEvent.click(screen.getByRole('button', { name: /khớp giao dịch/i }));
+
+    await waitFor(() =>
+      expect(apiRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: '/api/v1/bank-transactions/bt9/match',
+          method: 'POST',
+          data: expect.objectContaining({
+            allocations: [{ receivableId: 'r9', amount: 50_000_000 }],
+          }),
+        }),
+      ),
+    );
+  });
+
+  // Fetching one capped page and filtering statuses in the browser can hide
+  // open receivables: closed records may fill the page. The server has to do
+  // the narrowing, or the reviewer simply cannot see money they can apply.
+  it('asks the server for each open status instead of filtering a capped page', async () => {
+    apiRequest.mockImplementation(
+      (cfg: { url: string; params?: Record<string, unknown> }) => {
+        if (cfg.url.includes('/candidates')) return Promise.resolve([]);
+        if (cfg.url === '/api/v1/customers') {
+          return Promise.resolve({
+            items: [{ id: 'c9', name: 'Công ty Mới' }],
+          });
+        }
+        if (cfg.url === '/api/v1/receivables') {
+          return Promise.resolve({
+            items:
+              cfg.params?.status === 'PARTIALLY_PAID' ? [] : [openReceivable],
+            total: 1,
+            page: 1,
+            limit: 100,
+          });
+        }
+        return Promise.resolve({ id: 'bt9' });
+      },
+    );
+    renderDialog(undefined, { ...tx, status: 'UNMATCHED' });
+
+    fireEvent.change(await screen.findByLabelText(/tìm khách hàng/i), {
+      target: { value: 'cong ty moi' },
+    });
+    fireEvent.click(await screen.findByRole('combobox'));
+    fireEvent.click(await screen.findByRole('option', { name: 'Công ty Mới' }));
+
+    await screen.findByText('INV-2026-009 — Công ty Mới');
+    const receivableCalls = apiRequest.mock.calls
+      .map(([cfg]) => cfg)
+      .filter(
+        (cfg: { url: string; params?: Record<string, unknown> }) =>
+          cfg.url === '/api/v1/receivables',
+      );
+    expect(
+      receivableCalls
+        .map((cfg: { params?: { status?: string } }) => cfg.params?.status)
+        .sort(),
+    ).toEqual(['OPEN', 'PARTIALLY_PAID']);
+    // A request without a status would be the capped-page bug coming back.
+    expect(
+      receivableCalls.some(
+        (cfg: { params?: { status?: string } }) =>
+          cfg.params?.status === undefined,
+      ),
+    ).toBe(false);
+  });
+
+  // A failed load must not read as "this customer owes you nothing", because
+  // that message points the reviewer at mark-prepaid — the wrong accounting
+  // action for a customer who in fact has an open receivable.
+  it('reports a failed receivable load instead of claiming there is nothing open', async () => {
+    apiRequest.mockImplementation((cfg: { url: string }) => {
+      if (cfg.url.includes('/candidates')) return Promise.resolve([]);
+      if (cfg.url === '/api/v1/customers') {
+        return Promise.resolve({ items: [{ id: 'c9', name: 'Công ty Mới' }] });
+      }
+      if (cfg.url === '/api/v1/receivables') {
+        return Promise.reject(new Error('network'));
+      }
+      return Promise.resolve({ id: 'bt9' });
+    });
+    renderDialog(undefined, { ...tx, status: 'UNMATCHED' });
+
+    fireEvent.change(await screen.findByLabelText(/tìm khách hàng/i), {
+      target: { value: 'cong ty moi' },
+    });
+    fireEvent.click(await screen.findByRole('combobox'));
+    fireEvent.click(await screen.findByRole('option', { name: 'Công ty Mới' }));
+
+    expect(
+      await screen.findByText(/không tải được danh sách công nợ/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/không có khoản phải thu còn mở/i),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/ghi nhận công nợ nếu/i)).not.toBeInTheDocument();
+  });
+
+  // The allocated total is summed from the submitted rows, not from the raw
+  // input map: switching customer drops the first customer's rows but its
+  // amounts used to linger and still count against the transaction.
+  it('drops the previous customer amounts from the allocated total', async () => {
+    const receivableFor = (id: string, invoiceNumber: string) => ({
+      id,
+      customerId: id === 'r9' ? 'c9' : 'c10',
+      customerName: id === 'r9' ? 'Công ty Mới' : 'Công ty Khác',
+      invoiceId: invoiceNumber,
+      invoiceNumber,
+      originalAmount: 50_000_000,
+      paidAmount: 0,
+      remainingAmount: 50_000_000,
+      dueDate: '2026-09-15T00:00:00Z',
+      status: 'OPEN',
+      isDisputed: false,
+      disputeId: null,
+      isOverdue: false,
+      salesRepresentativeId: null,
+      createdAt: '2026-08-01T00:00:00Z',
+      closedAt: null,
+    });
+    apiRequest.mockImplementation(
+      (cfg: { url: string; params?: Record<string, unknown> }) => {
+        if (cfg.url.includes('/candidates')) return Promise.resolve([]);
+        if (cfg.url === '/api/v1/customers') {
+          return Promise.resolve({
+            items: [
+              { id: 'c9', name: 'Công ty Mới' },
+              { id: 'c10', name: 'Công ty Khác' },
+            ],
+          });
+        }
+        if (cfg.url === '/api/v1/receivables') {
+          // Mirrors the server: only the requested open status comes back.
+          if (cfg.params?.status === 'PARTIALLY_PAID') {
+            return Promise.resolve({
+              items: [],
+              total: 0,
+              page: 1,
+              limit: 100,
+            });
+          }
+          return Promise.resolve({
+            items:
+              cfg.params?.customerId === 'c10'
+                ? [receivableFor('r10', 'INV-2026-010')]
+                : [receivableFor('r9', 'INV-2026-009')],
+            total: 1,
+            page: 1,
+            limit: 100,
+          });
+        }
+        return Promise.resolve({ id: 'bt9' });
+      },
+    );
+    renderDialog(undefined, { ...tx, status: 'UNMATCHED' });
+
+    fireEvent.change(await screen.findByLabelText(/tìm khách hàng/i), {
+      target: { value: 'cong ty' },
+    });
+    fireEvent.click(await screen.findByRole('combobox'));
+    fireEvent.click(await screen.findByRole('option', { name: 'Công ty Mới' }));
+    fireEvent.change(
+      await screen.findByLabelText('Số tiền phân bổ cho INV-2026-009'),
+      { target: { value: '50000000' } },
+    );
+
+    fireEvent.click(screen.getByRole('combobox'));
+    fireEvent.click(
+      await screen.findByRole('option', { name: 'Công ty Khác' }),
+    );
+
+    await screen.findByText('INV-2026-010 — Công ty Khác');
+    // 50.000.000 ₫ is now only the transaction amount; the total is back to 0.
+    expect(screen.getByText(/Đã phân bổ:/)).toHaveTextContent(
+      'Đã phân bổ: 0 ₫',
+    );
   });
 });
 

@@ -15,13 +15,17 @@ import { AppModule } from '../src/app.module';
 import { AuditLogOrmEntity } from '../src/common/audit/audit-log.orm-entity';
 import { configureApp } from '../src/configure-app';
 import { CustomerOrmEntity } from '../src/modules/customers/infrastructure/customer.orm-entity';
+import { LedgerEventOrmEntity } from '../src/modules/ledger/infrastructure/ledger-event.orm-entity';
 import { Role } from '../src/modules/organizations/domain/membership';
 import { MembershipOrmEntity } from '../src/modules/organizations/infrastructure/membership.orm-entity';
 import { PaymentOrmEntity } from '../src/modules/payments/infrastructure/payment.orm-entity';
+import { ReceivableBalanceHistoryOrmEntity } from '../src/modules/receivable-balance-history/infrastructure/receivable-balance-history.orm-entity';
 import { ReceivableOrmEntity } from '../src/modules/receivables/infrastructure/receivable.orm-entity';
 import { UserOrmEntity } from '../src/modules/users/infrastructure/user.orm-entity';
+import { ProcessWebhookUseCase } from '../src/modules/webhooks/application/process-webhook.usecase';
 import { BankTransactionOrmEntity } from '../src/modules/webhooks/infrastructure/bank-transaction.orm-entity';
 import { MatchingCandidateOrmEntity } from '../src/modules/webhooks/infrastructure/matching-candidate.orm-entity';
+import { WebhookInboxOrmEntity } from '../src/modules/webhooks/infrastructure/webhook-inbox.orm-entity';
 import { startTestRedis } from './helpers/test-redis';
 import { createTwoPartyStartGate } from './helpers/two-party-start-gate';
 
@@ -366,5 +370,124 @@ describe('Exception Queue (e2e)', () => {
     expect(ambiguousById.get(clear)).toBe(false);
     expect(ambiguousById.get(single)).toBe(false);
     expect(ambiguousById.get(none)).toBe(false);
+  }, 30_000);
+
+  it('queues a low-scoring webhook transaction and matches it end to end', async () => {
+    const customerId = await createCustomer();
+    const receivableId = await createReceivable(customerId, 12_000_000);
+    // An unknown payer account and an invoice-free description score below the
+    // exception threshold, so the webhook stores the transaction UNMATCHED.
+    const inboxId = randomUUID();
+    await dataSource.getRepository(WebhookInboxOrmEntity).save({
+      id: inboxId,
+      organizationId,
+      bankConnectionId: randomUUID(),
+      providerTransactionId: '2043301',
+      rawPayload: {
+        error: 0,
+        data: {
+          id: 2_043_301,
+          transactionDateTime: '2026-08-20 10:00:00',
+          accountNumber: '99887766',
+          amount: 12_000_000,
+          description: 'chuyen tien',
+          counterAccountNumber: '5500009999',
+          counterAccountName: 'Unknown Payer',
+        },
+      },
+      receivedAt: new Date(),
+      status: 'RECEIVED',
+      processedAt: null,
+      errorMessage: null,
+      retryCount: 0,
+    });
+    await app
+      .get(ProcessWebhookUseCase, { strict: false })
+      .execute(inboxId, organizationId);
+
+    const transaction = await dataSource
+      .getRepository(BankTransactionOrmEntity)
+      .findOneByOrFail({ providerTransactionId: '2043301', organizationId });
+    expect(transaction.status).toBe('UNMATCHED');
+
+    const queue = await request(app.getHttpServer())
+      .get('/api/v1/bank-transactions/unmatched?limit=100')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+    // AC: the queue list and count include UNMATCHED without any filter.
+    expect(queue.body.total).toBeGreaterThanOrEqual(1);
+    const queued = queue.body.items.find(
+      (entry: { transaction: { id: string } }) =>
+        entry.transaction.id === transaction.id,
+    );
+    expect(queued).toBeDefined();
+    expect(queued.transaction.status).toBe('UNMATCHED');
+    // Nothing scored high enough to suggest, so the reviewer picks by hand.
+    expect(queued.topCandidate).toBeNull();
+
+    const counted = await request(app.getHttpServer())
+      .get('/api/v1/bank-transactions/pending-review-count')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+    expect(counted.body.count).toBe(queue.body.total);
+
+    const filtered = await request(app.getHttpServer())
+      .get('/api/v1/bank-transactions/unmatched?limit=100&status=UNMATCHED')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+    expect(
+      filtered.body.items.every(
+        (entry: { transaction: { status: string } }) =>
+          entry.transaction.status === 'UNMATCHED',
+      ),
+    ).toBe(true);
+    expect(filtered.body.total).toBeLessThanOrEqual(queue.body.total);
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/bank-transactions/${transaction.id}/match`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('Idempotency-Key', `match-unmatched-${transaction.id}`)
+      .send({
+        allocations: [{ receivableId, amount: 12_000_000 }],
+        version: queued.transaction.version,
+      })
+      .expect(201);
+
+    const receivable = await dataSource
+      .getRepository(ReceivableOrmEntity)
+      .findOneByOrFail({ id: receivableId });
+    expect(receivable.status).toBe(ReceivableStatus.PAID);
+    expect(Number(receivable.paidAmount)).toBe(12_000_000);
+
+    const payment = await dataSource
+      .getRepository(PaymentOrmEntity)
+      .findOneByOrFail({ bankTransactionId: transaction.id });
+    expect(Number(payment.allocatedAmount)).toBe(12_000_000);
+    expect(Number(payment.totalAmount) - Number(payment.allocatedAmount)).toBe(
+      0,
+    );
+    expect(
+      (
+        await dataSource
+          .getRepository(BankTransactionOrmEntity)
+          .findOneByOrFail({ id: transaction.id })
+      ).status,
+    ).toBe('MATCHED');
+
+    const history = await dataSource
+      .getRepository(ReceivableBalanceHistoryOrmEntity)
+      .find({
+        where: { organizationId, receivableId },
+        order: { effectiveAt: 'ASC', sequence: 'ASC' },
+      });
+    expect(history.length).toBeGreaterThan(0);
+    expect(Number(history.at(-1)?.remainingAmount)).toBe(0);
+
+    const ledgerEvents = await dataSource
+      .getRepository(LedgerEventOrmEntity)
+      .find({ where: { organizationId, subjectId: payment.id } });
+    expect(ledgerEvents.map((event) => event.kind)).toEqual(
+      expect.arrayContaining(['PAYMENT_RECEIVED']),
+    );
   }, 30_000);
 });

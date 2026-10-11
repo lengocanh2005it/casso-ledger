@@ -5,6 +5,7 @@ import type {
   MatchingCandidate,
   Payment,
   PendingReviewItem,
+  QueueStatus,
 } from '../types';
 
 export interface PendingReviewPage {
@@ -17,11 +18,17 @@ export interface PendingReviewPage {
 export function fetchPendingReview(
   page: number,
   search?: string,
+  status?: QueueStatus,
 ): Promise<PendingReviewPage> {
   return apiRequest<PendingReviewPage>({
     url: '/api/v1/bank-transactions/unmatched',
     method: 'GET',
-    params: { page, limit: 20, ...(search ? { search } : {}) },
+    params: {
+      page,
+      limit: 20,
+      ...(search ? { search } : {}),
+      ...(status ? { status } : {}),
+    },
   });
 }
 

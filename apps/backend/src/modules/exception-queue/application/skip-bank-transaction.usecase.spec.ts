@@ -98,4 +98,56 @@ describe('SkipBankTransactionUseCase', () => {
       errorCode: ErrorCode.NOT_FOUND,
     });
   });
+
+  it('skips an UNMATCHED transaction', async () => {
+    const bankTransactionRepo = {
+      findByIdForUpdate: jest
+        .fn()
+        .mockResolvedValue(buildTransaction('UNMATCHED')),
+      save: jest.fn(),
+    };
+    const dataSource = {
+      transaction: jest.fn(
+        (callback: (value: EntityManager) => Promise<unknown>) =>
+          callback({} as EntityManager),
+      ),
+    };
+    const useCase = new SkipBankTransactionUseCase(
+      bankTransactionRepo as never,
+      dataSource as never,
+      { setBefore: jest.fn(), setAfter: jest.fn() } as never,
+    );
+
+    await expect(useCase.execute('bt-1')).resolves.toMatchObject({
+      status: 'IGNORED',
+    });
+    expect(bankTransactionRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'IGNORED' }),
+      expect.anything(),
+    );
+  });
+
+  it('still refuses a transaction that already reached a terminal status', async () => {
+    const bankTransactionRepo = {
+      findByIdForUpdate: jest
+        .fn()
+        .mockResolvedValue(buildTransaction('PREPAID')),
+      save: jest.fn(),
+    };
+    const dataSource = {
+      transaction: jest.fn(
+        (callback: (value: EntityManager) => Promise<unknown>) =>
+          callback({} as EntityManager),
+      ),
+    };
+    const useCase = new SkipBankTransactionUseCase(
+      bankTransactionRepo as never,
+      dataSource as never,
+      { setBefore: jest.fn(), setAfter: jest.fn() } as never,
+    );
+
+    await expect(useCase.execute('bt-1')).rejects.toMatchObject({
+      errorCode: ErrorCode.CONFLICT,
+    });
+  });
 });

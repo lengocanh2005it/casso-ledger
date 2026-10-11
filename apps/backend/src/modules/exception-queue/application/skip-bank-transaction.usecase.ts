@@ -8,7 +8,10 @@ import {
   BANK_TRANSACTION_REPOSITORY,
   type IBankTransactionRepository,
 } from '../../webhooks/application/bank-transaction-repository.port';
-import { BankTransaction } from '../../webhooks/domain/bank-transaction';
+import {
+  BankTransaction,
+  isActionableStatus,
+} from '../../webhooks/domain/bank-transaction';
 
 @Injectable()
 export class SkipBankTransactionUseCase {
@@ -32,7 +35,7 @@ export class SkipBankTransactionUseCase {
         );
       }
       if (transaction.status === 'IGNORED') return transaction;
-      if (transaction.status !== 'PENDING_REVIEW') {
+      if (!isActionableStatus(transaction.status)) {
         throw new AppError(ErrorCode.CONFLICT, 'Giao dịch đã được xử lý.');
       }
 

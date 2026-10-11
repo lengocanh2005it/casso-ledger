@@ -13,6 +13,13 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import {
   Table,
@@ -52,10 +59,17 @@ export function ExceptionsPage() {
   const { searchParams, setParam, setPage } = useUrlQueryParams();
   const page = Number(searchParams.get('page') ?? '1');
   const search = searchParams.get('search') ?? '';
+  const status = searchParams.get('status') ?? '';
   const debouncedSearch = useDebouncedValue(search, 250);
   const [selected, setSelected] = useState<PendingReviewItem | null>(null);
   const { data, isPending, isError, isPlaceholderData, refetch, isFetching } =
-    usePendingReview(page, debouncedSearch || undefined);
+    usePendingReview(
+      page,
+      debouncedSearch || undefined,
+      status === 'UNMATCHED' || status === 'PENDING_REVIEW'
+        ? status
+        : undefined,
+    );
   // Placeholder rows belong to the previous page/search: clear the selection
   // so skip / prepaid / match cannot act on them under the new context.
   const bulkSelection = useBulkSelection(
@@ -82,26 +96,45 @@ export function ExceptionsPage() {
         title="Giao dịch cần rà soát"
         description="Tìm kiếm, chọn và xử lý các giao dịch chưa khớp."
       >
-        <div className="relative mb-4 sm:max-w-md">
-          <Search
-            aria-hidden="true"
-            className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
-          />
-          <Input
-            name="search"
-            type="search"
-            autoComplete="off"
-            aria-label="Tìm kiếm giao dịch"
-            placeholder="Tìm tên, số tài khoản, nội dung…"
-            value={search}
-            onChange={(event) =>
-              setParam('search', event.target.value, {
-                resetPage: true,
-                replace: true,
-              })
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <div className="relative w-full sm:max-w-md">
+            <Search
+              aria-hidden="true"
+              className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+            />
+            <Input
+              name="search"
+              type="search"
+              autoComplete="off"
+              aria-label="Tìm kiếm giao dịch"
+              placeholder="Tìm tên, số tài khoản, nội dung…"
+              value={search}
+              onChange={(event) =>
+                setParam('search', event.target.value, {
+                  resetPage: true,
+                  replace: true,
+                })
+              }
+              className="pl-9"
+            />
+          </div>
+          {/* Both queue statuses are actionable; the filter only narrows which
+              of them the reviewer is looking at. */}
+          <Select
+            value={status}
+            onValueChange={(value) =>
+              setParam('status', value, { resetPage: true, replace: true })
             }
-            className="pl-9"
-          />
+          >
+            <SelectTrigger aria-label="Lọc theo trạng thái" className="w-52">
+              <SelectValue placeholder="Tất cả trạng thái" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Tất cả trạng thái</SelectItem>
+              <SelectItem value="PENDING_REVIEW">Chờ rà soát</SelectItem>
+              <SelectItem value="UNMATCHED">Chưa khớp</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         {(isPending || showsEmptyPlaceholder) && <TableSkeleton rows={5} />}
         {isError && (
@@ -269,6 +302,8 @@ export function ExceptionsPage() {
                           <Badge variant="outline">
                             {row.topCandidate.totalScore}/100
                           </Badge>
+                        ) : row.transaction.status === 'UNMATCHED' ? (
+                          <Badge variant="outline">Chưa khớp</Badge>
                         ) : (
                           <span className="text-muted-foreground max-lg:hidden">
                             —
