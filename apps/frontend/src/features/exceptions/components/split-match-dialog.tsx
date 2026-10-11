@@ -1,4 +1,4 @@
-import { Permission } from '@casso-ar/shared-types';
+import { Permission, ReceivableStatus } from '@casso-ar/shared-types';
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { TruncatedCopyId } from '@/components/shared/truncated-copy-id';
@@ -59,6 +59,10 @@ function AiRecommendationNotice({
   }
   return <p className="text-sm text-muted-foreground">AI không có gợi ý</p>;
 }
+
+// ponytail: the list endpoint's max page. A customer with more open
+// receivables than this would need its own paging in the picker.
+const MANUAL_PICK_LIMIT = 100;
 
 async function rememberPayerAccount(
   customerId: string,
@@ -145,27 +149,32 @@ export function SplitMatchDialog({
   // not masquerade as "no suggestions".
   const needsManualPick =
     !candidatesLoading && !candidatesFailed && sortedCandidates.length === 0;
-  // ponytail: one page of 100 (the API's max) filtered client-side; add the
-  // list endpoint's status filter + paging if a customer ever exceeds it.
-  const { data: manualPickPage, isLoading: manualPickLoading } = useReceivables(
-    { customerId: prepaidCustomerId },
+  // Ask the server for the open statuses rather than fetching one capped page
+  // and narrowing it here: a customer with many closed receivables would fill
+  // the page with rows that can never be allocated to.
+  const manualPickEnabled =
+    open && needsManualPick && prepaidCustomerId.length > 0;
+  const { data: openPage, isError: openFailed } = useReceivables(
+    { customerId: prepaidCustomerId, status: ReceivableStatus.OPEN },
     1,
-    100,
-    {
-      enabled: open && needsManualPick && prepaidCustomerId.length > 0,
-    },
+    MANUAL_PICK_LIMIT,
+    { enabled: manualPickEnabled },
   );
+  const { data: partialPage, isError: partialFailed } = useReceivables(
+    { customerId: prepaidCustomerId, status: ReceivableStatus.PARTIALLY_PAID },
+    1,
+    MANUAL_PICK_LIMIT,
+    { enabled: manualPickEnabled },
+  );
+  const manualPickFailed = manualPickEnabled && (openFailed || partialFailed);
   const manualPickReceivables = useMemo(
     () =>
-      needsManualPick
-        ? (manualPickPage?.items ?? []).filter(
-            (receivable) =>
-              (receivable.status === 'OPEN' ||
-                receivable.status === 'PARTIALLY_PAID') &&
-              receivable.remainingAmount > 0,
+      needsManualPick && !manualPickFailed
+        ? [...(openPage?.items ?? []), ...(partialPage?.items ?? [])].filter(
+            (receivable) => receivable.remainingAmount > 0,
           )
         : [],
-    [needsManualPick, manualPickPage],
+    [needsManualPick, manualPickFailed, openPage, partialPage],
   );
   const rows = useMemo(
     () =>
@@ -361,11 +370,14 @@ export function SplitMatchDialog({
               các khoản phải thu còn mở.
             </p>
           )}
-          {needsManualPick && manualPickLoading && (
-            <p className="text-sm text-muted-foreground">Đang tải công nợ…</p>
+          {needsManualPick && manualPickFailed && (
+            <p role="alert" className="text-sm text-destructive">
+              Không tải được danh sách công nợ của khách hàng này. Vui lòng thử
+              lại trước khi quyết định ghi nhận công nợ.
+            </p>
           )}
           {needsManualPick &&
-            !manualPickLoading &&
+            !manualPickFailed &&
             prepaidCustomerId &&
             manualPickReceivables.length === 0 && (
               <p className="text-sm text-muted-foreground">
